@@ -1,9 +1,11 @@
-﻿from fastapi import FastAPI, Request, UploadFile, File
+﻿from typing import Literal
+from datetime import datetime
+from fastapi import FastAPI, Request, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, String, Float
+from pydantic import BaseModel, field_validator
+from sqlalchemy import create_engine, Column, Integer, String, Float, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 import csv
 import io
@@ -27,11 +29,12 @@ class Trade(Base):
     __tablename__ = "trades"
 
     id = Column(Integer, primary_key=True, index=True)
-    stock_code = Column(String)
-    stock_name = Column(String)
-    trade_type = Column(String)  # buy or sell
-    quantity = Column(Integer)
-    price = Column(Float)
+    stock_code = Column(String, nullable=False)
+    stock_name = Column(String, nullable=False)
+    trade_type = Column(String, nullable=False)  # buy or sell
+    quantity = Column(Integer, nullable=False)
+    price = Column(Float, nullable=False)
+    trade_date = Column(String, nullable=False)
 
 
 class StockPrice(Base):
@@ -46,19 +49,104 @@ class StockPrice(Base):
 Base.metadata.create_all(bind=engine)
 
 
+def ensure_trade_date_column():
+    with engine.connect() as conn:
+        columns = conn.execute(text("PRAGMA table_info(trades)")).fetchall()
+        column_names = {row[1] for row in columns}
+        if "trade_date" not in column_names:
+            conn.execute(
+                text(
+                    "ALTER TABLE trades "
+                    "ADD COLUMN trade_date TEXT NOT NULL DEFAULT '1970-01-01'"
+                )
+            )
+            conn.commit()
+
+
+ensure_trade_date_column()
+
+
 # 요청 데이터 형식
 class TradeCreate(BaseModel):
     stock_code: str
     stock_name: str
-    trade_type: str
+    trade_type: Literal["buy", "sell"]
     quantity: int
     price: float
+    trade_date: str
+
+    @field_validator("stock_code", "stock_name")
+    @classmethod
+    def validate_text(cls, v: str):
+        value = v.strip()
+        if not value:
+            raise ValueError("빈 값은 허용되지 않습니다.")
+        return value
+
+    @field_validator("quantity")
+    @classmethod
+    def validate_quantity(cls, v: int):
+        if v <= 0:
+            raise ValueError("수량은 1 이상이어야 합니다.")
+        return v
+
+    @field_validator("price")
+    @classmethod
+    def validate_price(cls, v: float):
+        if v <= 0:
+            raise ValueError("가격은 0보다 커야 합니다.")
+        return v
+
+    @field_validator("trade_date")
+    @classmethod
+    def validate_trade_date(cls, v: str):
+        value = v.strip()
+        if not value:
+            raise ValueError("거래일은 비워둘 수 없습니다.")
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("거래일 형식은 YYYY-MM-DD 이어야 합니다.") from exc
+        return value
 
 
 class StockPriceCreate(BaseModel):
     stock_code: str
     stock_name: str
     current_price: float
+
+    @field_validator("stock_code", "stock_name")
+    @classmethod
+    def validate_text(cls, v: str):
+        value = v.strip()
+        if not value:
+            raise ValueError("빈 값은 허용되지 않습니다.")
+        return value
+
+    @field_validator("current_price")
+    @classmethod
+    def validate_current_price(cls, v: float):
+        if v < 0:
+            raise ValueError("현재가는 0 이상이어야 합니다.")
+        return v
+
+
+def calculate_holding_quantity(db, stock_code: str, exclude_trade_id: int | None = None) -> int:
+    query = db.query(Trade).filter(Trade.stock_code == stock_code).order_by(Trade.trade_date, Trade.id)
+
+    if exclude_trade_id is not None:
+        query = query.filter(Trade.id != exclude_trade_id)
+
+    trades = query.all()
+
+    quantity = 0
+    for trade in trades:
+        if trade.trade_type == "buy":
+            quantity += trade.quantity
+        elif trade.trade_type == "sell":
+            quantity -= trade.quantity
+
+    return quantity
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -75,12 +163,19 @@ def index(request: Request):
 def create_trade(trade: TradeCreate):
     db = SessionLocal()
 
+    if trade.trade_type == "sell":
+        holding_qty = calculate_holding_quantity(db, trade.stock_code)
+        if trade.quantity > holding_qty:
+            db.close()
+            raise HTTPException(status_code=400, detail="보유 수량보다 많은 매도는 불가능합니다.")
+
     new_trade = Trade(
         stock_code=trade.stock_code,
         stock_name=trade.stock_name,
         trade_type=trade.trade_type,
         quantity=trade.quantity,
         price=trade.price,
+        trade_date=trade.trade_date,
     )
 
     db.add(new_trade)
@@ -95,7 +190,7 @@ def create_trade(trade: TradeCreate):
 @app.get("/trades")
 def get_trades():
     db = SessionLocal()
-    trades = db.query(Trade).all()
+    trades = db.query(Trade).order_by(Trade.trade_date, Trade.id).all()
     db.close()
 
     return trades
@@ -108,7 +203,7 @@ def get_trade(trade_id: int):
     db.close()
 
     if not trade:
-        return {"message": "해당 거래를 찾을 수 없습니다."}
+        raise HTTPException(status_code=404, detail="해당 거래를 찾을 수 없습니다.")
 
     return trade
 
@@ -120,13 +215,24 @@ def update_trade(trade_id: int, trade_data: TradeCreate):
 
     if not trade:
         db.close()
-        return {"message": "해당 거래를 찾을 수 없습니다."}
+        raise HTTPException(status_code=404, detail="해당 거래를 찾을 수 없습니다.")
+
+    if trade_data.trade_type == "sell":
+        holding_qty = calculate_holding_quantity(
+            db,
+            trade_data.stock_code,
+            exclude_trade_id=trade_id
+        )
+        if trade_data.quantity > holding_qty:
+            db.close()
+            raise HTTPException(status_code=400, detail="보유 수량보다 많은 매도는 불가능합니다.")
 
     trade.stock_code = trade_data.stock_code
     trade.stock_name = trade_data.stock_name
     trade.trade_type = trade_data.trade_type
     trade.quantity = trade_data.quantity
     trade.price = trade_data.price
+    trade.trade_date = trade_data.trade_date
 
     db.commit()
     db.refresh(trade)
@@ -138,7 +244,7 @@ def update_trade(trade_id: int, trade_data: TradeCreate):
 @app.get("/portfolio")
 def get_portfolio():
     db = SessionLocal()
-    trades = db.query(Trade).order_by(Trade.id).all()
+    trades = db.query(Trade).order_by(Trade.trade_date, Trade.id).all()
     prices = db.query(StockPrice).all()
     db.close()
 
@@ -176,7 +282,7 @@ def get_portfolio():
             sell_quantity = trade.quantity
 
             if sell_quantity > item["quantity"]:
-                sell_quantity = item["quantity"]
+                raise ValueError(f"{code} 종목의 매도 수량이 보유 수량보다 많습니다.")
 
             avg_price = item["avg_price"]
             cost_of_sold = avg_price * sell_quantity
@@ -227,7 +333,7 @@ def delete_trade(trade_id: int):
 
     if not trade:
         db.close()
-        return {"message": "해당 거래를 찾을 수 없습니다."}
+        raise HTTPException(status_code=404, detail="해당 거래를 찾을 수 없습니다.")
 
     db.delete(trade)
     db.commit()
@@ -294,13 +400,13 @@ def get_summary():
 @app.get("/export/trades")
 def export_trades_csv():
     db = SessionLocal()
-    trades = db.query(Trade).order_by(Trade.id).all()
+    trades = db.query(Trade).order_by(Trade.trade_date, Trade.id).all()
     db.close()
 
     output = io.StringIO()
     writer = csv.writer(output)
 
-    writer.writerow(["id", "stock_code", "stock_name", "trade_type", "quantity", "price"])
+    writer.writerow(["id", "stock_code", "stock_name", "trade_type", "quantity", "price", "trade_date"])
 
     for trade in trades:
         writer.writerow([
@@ -309,7 +415,8 @@ def export_trades_csv():
             trade.stock_name,
             trade.trade_type,
             trade.quantity,
-            trade.price
+            trade.price,
+            trade.trade_date,
         ])
 
     output.seek(0)
@@ -324,27 +431,68 @@ def export_trades_csv():
 @app.post("/import/trades")
 async def import_trades_csv(file: UploadFile = File(...)):
     db = SessionLocal()
-
-    content = await file.read()
-    decoded = content.decode("utf-8-sig")
-    csv_file = io.StringIO(decoded)
-    reader = csv.DictReader(csv_file)
-
     imported_count = 0
 
-    for row in reader:
-        trade = Trade(
-            stock_code=row["stock_code"],
-            stock_name=row["stock_name"],
-            trade_type=row["trade_type"],
-            quantity=int(row["quantity"]),
-            price=float(row["price"])
-        )
-        db.add(trade)
-        imported_count += 1
+    try:
+        content = await file.read()
+        decoded = content.decode("utf-8-sig")
+        csv_file = io.StringIO(decoded)
+        reader = csv.DictReader(csv_file)
 
-    db.commit()
-    db.close()
+        required_columns = {"stock_code", "stock_name", "trade_type", "quantity", "price", "trade_date"}
+        if not reader.fieldnames or not required_columns.issubset(set(reader.fieldnames)):
+            raise HTTPException(status_code=400, detail="거래 CSV 헤더가 올바르지 않습니다.")
+
+        holding_cache: dict[str, int] = {}
+
+        for idx, row in enumerate(reader, start=2):
+            try:
+                stock_code = row["stock_code"].strip()
+                stock_name = row["stock_name"].strip()
+                trade_type = row["trade_type"].strip().lower()
+                quantity = int(row["quantity"])
+                price = float(row["price"])
+                trade_date = row["trade_date"].strip()
+
+                if not stock_code or not stock_name:
+                    raise ValueError("종목코드/종목명이 비어 있습니다.")
+                if trade_type not in ("buy", "sell"):
+                    raise ValueError("trade_type은 buy 또는 sell 이어야 합니다.")
+                if quantity <= 0:
+                    raise ValueError("수량은 1 이상이어야 합니다.")
+                if price <= 0:
+                    raise ValueError("가격은 0보다 커야 합니다.")
+                try:
+                    datetime.strptime(trade_date, "%Y-%m-%d")
+                except ValueError as exc:
+                    raise ValueError("거래일 형식은 YYYY-MM-DD 이어야 합니다.") from exc
+
+                if stock_code not in holding_cache:
+                    holding_cache[stock_code] = calculate_holding_quantity(db, stock_code)
+
+                if trade_type == "sell":
+                    if quantity > holding_cache[stock_code]:
+                        raise ValueError("보유 수량보다 많은 매도는 불가능합니다.")
+                    holding_cache[stock_code] -= quantity
+                else:
+                    holding_cache[stock_code] += quantity
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"{idx}행 오류: {str(e)}")
+
+            trade = Trade(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                trade_type=trade_type,
+                quantity=quantity,
+                price=price,
+                trade_date=trade_date,
+            )
+            db.add(trade)
+            imported_count += 1
+
+        db.commit()
+    finally:
+        db.close()
 
     return {"message": "거래 CSV 불러오기 완료", "count": imported_count}
 
