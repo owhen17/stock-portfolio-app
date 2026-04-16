@@ -1,0 +1,25 @@
+﻿{
+  "id": "/",
+  "name": "주식 포트폴리오 앱",
+  "short_name": "포트폴리오",
+  "description": "내 거래 주식 통계와 포트폴리오를 관리하는 앱",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f7f7",
+  "theme_color": "#222222",
+  "lang": "ko",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
