@@ -1,0 +1,614 @@
+﻿<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>주식 포트폴리오 앱</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+            background-color: #f7f7f7;
+            color: #222;
+        }
+
+        h1,
+        h2 {
+            margin-bottom: 12px;
+        }
+
+        .section {
+            background: white;
+            padding: 20px;
+            margin-bottom: 24px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+
+        input,
+        select,
+        button {
+            padding: 10px;
+            margin: 6px 4px 6px 0;
+            font-size: 14px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+        }
+
+        button {
+            cursor: pointer;
+            background-color: #222;
+            color: white;
+            border: none;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 12px;
+            background: white;
+        }
+
+        th,
+        td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+        }
+
+        th {
+            background-color: #efefef;
+        }
+
+        .message {
+            margin-top: 10px;
+            font-weight: bold;
+        }
+
+        .success {
+            color: green;
+        }
+
+        .error {
+            color: red;
+        }
+
+        .profit {
+            color: red;
+            font-weight: bold;
+        }
+
+        .loss {
+            color: blue;
+            font-weight: bold;
+        }
+
+        .neutral {
+            color: #444;
+            font-weight: bold;
+        }
+
+        .buy-text {
+            color: red;
+            font-weight: bold;
+        }
+
+        .sell-text {
+            color: blue;
+            font-weight: bold;
+        }
+
+        .number-cell {
+            text-align: right;
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .summary-card {
+            background: #fafafa;
+            border: 1px solid #e5e5e5;
+            border-radius: 10px;
+            padding: 16px;
+        }
+
+        .summary-label {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 8px;
+        }
+
+        .summary-value {
+            font-size: 22px;
+            font-weight: bold;
+        }
+
+        @media (max-width: 900px) {
+            .summary-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 600px) {
+            .summary-grid {
+                grid-template-columns: 1fr;
+            }
+
+            body {
+                margin: 16px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <h1>주식 포트폴리오 앱</h1>
+
+    <div class="section">
+        <h2>총자산 요약</h2>
+        <div id="summary-table-body" class="summary-grid"></div>
+    </div>
+
+    <div class="section">
+        <h2>현재가 입력</h2>
+        <input type="text" id="price_stock_code" placeholder="종목코드">
+        <input type="text" id="price_stock_name" placeholder="종목명">
+        <input type="number" id="current_price" placeholder="현재가">
+        <button onclick="savePrice()">현재가 저장</button>
+    </div>
+
+    <div class="section">
+        <h2>CSV 백업 / 불러오기</h2>
+
+        <div style="margin-bottom: 16px;">
+            <button onclick="downloadTradesCsv()">거래 CSV 다운로드</button>
+            <input type="file" id="trades_csv_file" accept=".csv">
+            <button onclick="uploadTradesCsv()">거래 CSV 업로드</button>
+        </div>
+
+        <div>
+            <button onclick="downloadPricesCsv()">현재가 CSV 다운로드</button>
+            <input type="file" id="prices_csv_file" accept=".csv">
+            <button onclick="uploadPricesCsv()">현재가 CSV 업로드</button>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>거래 입력</h2>
+        <input type="hidden" id="edit_trade_id">
+        <input type="text" id="stock_code" placeholder="종목코드">
+        <input type="text" id="stock_name" placeholder="종목명">
+        <select id="trade_type">
+            <option value="buy">매수</option>
+            <option value="sell">매도</option>
+        </select>
+        <input type="number" id="quantity" placeholder="수량">
+        <input type="number" id="price" placeholder="가격">
+        <button id="trade-submit-button" onclick="addTrade()">저장</button>
+        <button type="button" onclick="cancelEdit()">수정 취소</button>
+        <div class="message" id="message"></div>
+    </div>
+
+    <div class="section">
+        <h2>거래 목록</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th class="number-cell">ID</th>
+                    <th>종목코드</th>
+                    <th>종목명</th>
+                    <th>구분</th>
+                    <th class="number-cell">수량</th>
+                    <th class="number-cell">가격</th>
+                    <th>수정</th>
+                    <th>삭제</th>
+                </tr>
+            </thead>
+            <tbody id="trade-table-body"></tbody>
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>포트폴리오</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>종목코드</th>
+                    <th>종목명</th>
+                    <th class="number-cell">보유수량</th>
+                    <th class="number-cell">평균단가</th>
+                    <th class="number-cell">총원가</th>
+                    <th class="number-cell">실현손익</th>
+                    <th class="number-cell">현재가</th>
+                    <th class="number-cell">평가금액</th>
+                    <th class="number-cell">미실현손익</th>
+                    <th class="number-cell">수익률(%)</th>
+                </tr>
+            </thead>
+            <tbody id="portfolio-table-body"></tbody>
+        </table>
+    </div>
+
+    <script>
+        function formatNumber(num) {
+            return Number(num).toLocaleString();
+        }
+
+        function getProfitClass(value) {
+            if (value > 0) return 'profit';
+            if (value < 0) return 'loss';
+            return 'neutral';
+        }
+
+        function getTradeTypeLabel(tradeType) {
+            return tradeType === 'buy' ? '매수' : '매도';
+        }
+
+        function getTradeTypeClass(tradeType) {
+            return tradeType === 'buy' ? 'buy-text' : 'sell-text';
+        }
+
+        async function loadTrades() {
+            const response = await fetch('/trades');
+            const data = await response.json();
+
+            const tableBody = document.getElementById('trade-table-body');
+            tableBody.innerHTML = '';
+
+            data.forEach(trade => {
+                const row = `
+                    <tr>
+                        <td class="number-cell">${trade.id}</td>
+                        <td>${trade.stock_code}</td>
+                        <td>${trade.stock_name}</td>
+                        <td class="${getTradeTypeClass(trade.trade_type)}">${getTradeTypeLabel(trade.trade_type)}</td>
+                        <td class="number-cell">${formatNumber(trade.quantity)}</td>
+                        <td class="number-cell">${formatNumber(trade.price)}</td>
+                        <td><button onclick="editTrade(${trade.id})">수정</button></td>
+                        <td><button onclick="deleteTrade(${trade.id})">삭제</button></td>
+                    </tr>
+                `;
+                tableBody.innerHTML += row;
+            });
+        }
+
+        async function loadPortfolio() {
+            const response = await fetch('/portfolio');
+            const data = await response.json();
+
+            const tableBody = document.getElementById('portfolio-table-body');
+            tableBody.innerHTML = '';
+
+            data.forEach(item => {
+                if (item.quantity === 0) {
+                    return;
+                }
+
+                const row = `
+                    <tr>
+                        <td>${item.stock_code}</td>
+                        <td>${item.stock_name}</td>
+                        <td class="number-cell">${formatNumber(item.quantity)}</td>
+                        <td class="number-cell">${formatNumber(item.avg_price)}</td>
+                        <td class="number-cell">${formatNumber(item.total_cost)}</td>
+                        <td class="number-cell ${getProfitClass(item.realized_profit)}">${formatNumber(item.realized_profit)}</td>
+                        <td class="number-cell">${formatNumber(item.current_price)}</td>
+                        <td class="number-cell">${formatNumber(item.eval_amount)}</td>
+                        <td class="number-cell ${getProfitClass(item.unrealized_profit)}">${formatNumber(item.unrealized_profit)}</td>
+                        <td class="number-cell ${getProfitClass(item.profit_rate)}">${formatNumber(item.profit_rate)}%</td>
+                    </tr>
+                `;
+                tableBody.innerHTML += row;
+            });
+        }
+
+        async function savePrice() {
+            const stockCode = document.getElementById('price_stock_code').value.trim();
+            const stockName = document.getElementById('price_stock_name').value.trim();
+            const currentPrice = parseFloat(document.getElementById('current_price').value);
+            const message = document.getElementById('message');
+
+            if (!stockCode || !stockName) {
+                message.textContent = "현재가 입력용 종목코드와 종목명을 입력하세요.";
+                message.className = "message error";
+                return;
+            }
+
+            if (!currentPrice || currentPrice <= 0) {
+                message.textContent = "현재가는 1 이상이어야 합니다.";
+                message.className = "message error";
+                return;
+            }
+
+            const response = await fetch('/prices', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    stock_code: stockCode,
+                    stock_name: stockName,
+                    current_price: currentPrice
+                })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                message.textContent = '현재가가 저장되었습니다.';
+                message.className = 'message success';
+
+                document.getElementById('price_stock_code').value = '';
+                document.getElementById('price_stock_name').value = '';
+                document.getElementById('current_price').value = '';
+
+                loadPortfolio();
+                loadSummary();
+            } else {
+                message.textContent = '현재가 저장 중 오류가 발생했습니다.';
+                message.className = 'message error';
+                console.log(result);
+            }
+        }
+
+        function downloadTradesCsv() {
+            window.location.href = '/export/trades';
+        }
+
+        function downloadPricesCsv() {
+            window.location.href = '/export/prices';
+        }
+
+        async function uploadTradesCsv() {
+            const fileInput = document.getElementById('trades_csv_file');
+            const message = document.getElementById('message');
+
+            if (!fileInput.files.length) {
+                message.textContent = '업로드할 거래 CSV 파일을 선택하세요.';
+                message.className = 'message error';
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            const response = await fetch('/import/trades', {
+                method: 'POST',
+                body: formData
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                message.textContent = `거래 CSV 업로드 완료 (${result.count}건)`;
+                message.className = 'message success';
+                fileInput.value = '';
+                loadTrades();
+                loadPortfolio();
+                loadSummary();
+            } else {
+                message.textContent = '거래 CSV 업로드 중 오류가 발생했습니다.';
+                message.className = 'message error';
+                console.log(result);
+            }
+        }
+
+        async function uploadPricesCsv() {
+            const fileInput = document.getElementById('prices_csv_file');
+            const message = document.getElementById('message');
+
+            if (!fileInput.files.length) {
+                message.textContent = '업로드할 현재가 CSV 파일을 선택하세요.';
+                message.className = 'message error';
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            const response = await fetch('/import/prices', {
+                method: 'POST',
+                body: formData
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                message.textContent = `현재가 CSV 업로드 완료 (${result.count}건)`;
+                message.className = 'message success';
+                fileInput.value = '';
+                loadPortfolio();
+                loadSummary();
+            } else {
+                message.textContent = '현재가 CSV 업로드 중 오류가 발생했습니다.';
+                message.className = 'message error';
+                console.log(result);
+            }
+        }
+
+        async function loadSummary() {
+            const response = await fetch('/summary');
+            const data = await response.json();
+
+            const summaryBody = document.getElementById('summary-table-body');
+
+            summaryBody.innerHTML = `
+                <div class="summary-card">
+                    <div class="summary-label">총원가</div>
+                    <div class="summary-value">${formatNumber(data.total_cost)}</div>
+                </div>
+
+                <div class="summary-card">
+                    <div class="summary-label">총평가금액</div>
+                    <div class="summary-value">${formatNumber(data.total_eval_amount)}</div>
+                </div>
+
+                <div class="summary-card">
+                    <div class="summary-label">총실현손익</div>
+                    <div class="summary-value ${getProfitClass(data.total_realized_profit)}">
+                        ${formatNumber(data.total_realized_profit)}
+                    </div>
+                </div>
+
+                <div class="summary-card">
+                    <div class="summary-label">총미실현손익</div>
+                    <div class="summary-value ${getProfitClass(data.total_unrealized_profit)}">
+                        ${formatNumber(data.total_unrealized_profit)}
+                    </div>
+                </div>
+
+                <div class="summary-card">
+                    <div class="summary-label">총수익률(%)</div>
+                    <div class="summary-value ${getProfitClass(data.total_profit_rate)}">
+                        ${formatNumber(data.total_profit_rate)}%
+                    </div>
+                </div>
+            `;
+        }
+
+        function clearTradeForm() {
+            document.getElementById('edit_trade_id').value = '';
+            document.getElementById('stock_code').value = '';
+            document.getElementById('stock_name').value = '';
+            document.getElementById('trade_type').value = 'buy';
+            document.getElementById('quantity').value = '';
+            document.getElementById('price').value = '';
+            document.getElementById('trade-submit-button').textContent = '저장';
+        }
+
+        async function editTrade(tradeId) {
+            const response = await fetch(`/trades/${tradeId}`);
+            const trade = await response.json();
+
+            if (!response.ok || trade.message) {
+                document.getElementById('message').textContent = '거래 정보를 불러오지 못했습니다.';
+                document.getElementById('message').className = 'message error';
+                return;
+            }
+
+            document.getElementById('edit_trade_id').value = trade.id;
+            document.getElementById('stock_code').value = trade.stock_code;
+            document.getElementById('stock_name').value = trade.stock_name;
+            document.getElementById('trade_type').value = trade.trade_type;
+            document.getElementById('quantity').value = trade.quantity;
+            document.getElementById('price').value = trade.price;
+            document.getElementById('trade-submit-button').textContent = '수정 저장';
+
+            document.getElementById('message').textContent = `ID ${trade.id} 거래 수정 중`;
+            document.getElementById('message').className = 'message';
+        }
+
+        function cancelEdit() {
+            clearTradeForm();
+            document.getElementById('message').textContent = '수정이 취소되었습니다.';
+            document.getElementById('message').className = 'message';
+        }
+
+        async function addTrade() {
+            const editTradeId = document.getElementById('edit_trade_id').value;
+            const stockCode = document.getElementById('stock_code').value.trim();
+            const stockName = document.getElementById('stock_name').value.trim();
+            const tradeType = document.getElementById('trade_type').value;
+            const quantity = parseInt(document.getElementById('quantity').value);
+            const price = parseFloat(document.getElementById('price').value);
+            const message = document.getElementById('message');
+
+            if (!stockCode || !stockName) {
+                message.textContent = "종목코드와 종목명을 입력하세요.";
+                message.className = "message error";
+                return;
+            }
+
+            if (!quantity || quantity <= 0) {
+                message.textContent = "수량은 1 이상이어야 합니다.";
+                message.className = "message error";
+                return;
+            }
+
+            if (!price || price <= 0) {
+                message.textContent = "가격은 1 이상이어야 합니다.";
+                message.className = "message error";
+                return;
+            }
+
+            let url = '/trades';
+            let method = 'POST';
+
+            if (editTradeId) {
+                url = `/trades/${editTradeId}`;
+                method = 'PUT';
+            }
+
+            const response = await fetch(url, {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    stock_code: stockCode,
+                    stock_name: stockName,
+                    trade_type: tradeType,
+                    quantity: quantity,
+                    price: price
+                })
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                message.textContent = editTradeId ? '거래가 수정되었습니다.' : '거래가 저장되었습니다.';
+                message.className = 'message success';
+                clearTradeForm();
+
+                loadTrades();
+                loadPortfolio();
+                loadSummary();
+            } else {
+                message.textContent = '오류가 발생했습니다.';
+                message.className = 'message error';
+                console.log(result);
+            }
+        }
+
+        async function deleteTrade(tradeId) {
+            const confirmed = confirm("이 거래를 삭제하시겠습니까?");
+            if (!confirmed) {
+                return;
+            }
+
+            const response = await fetch(`/trades/${tradeId}`, {
+                method: 'DELETE'
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                document.getElementById('message').textContent = '거래가 삭제되었습니다.';
+                document.getElementById('message').className = 'message success';
+                clearTradeForm();
+                loadTrades();
+                loadPortfolio();
+                loadSummary();
+            } else {
+                document.getElementById('message').textContent = '삭제 중 오류가 발생했습니다.';
+                document.getElementById('message').className = 'message error';
+                console.log(result);
+            }
+        }
+
+        loadTrades();
+        loadPortfolio();
+        loadSummary();
+    </script>
+</body>
+
+</html>
